@@ -1,4 +1,4 @@
-name: Diagnose MemPostings normal test
+name: Diagnose Head postings error
 
 on:
   pull_request:
@@ -12,15 +12,17 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
+      - name: Clone correctness branch
+        run: git clone -q --depth=1 --branch tsdb-mempostings-correctness-fix https://github.com/StealthEyeLLC/prometheus.git repo
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: 1.26.x
-      - name: Run one focused test pass
+          cache-dependency-path: repo/go.sum
+      - name: Run Head test
         run: |
-          git clone -q --depth=1 --branch tsdb-mempostings-correctness-fix https://github.com/StealthEyeLLC/prometheus.git repo
           cd repo
           set +e
-          go test ./tsdb ./tsdb/index -run 'TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings|TestMemPostingsOutOfOrderAddDoesNotChangeExistingIterator|TestMemPostingsReadWaiterBlocksNewAdds|TestMemPostingsPartialLabelSetVisibility' -count=1 -timeout=2m >test.log 2>&1
+          go test ./tsdb -run '^TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings$' -count=1 -timeout=2m >test.log 2>&1
           status=$?
-          tail -n 20 test.log
+          grep -E 'FAIL:|Error Trace:|Error:|Test:|series [0-9]+|panic: test timed out' test.log || true
           exit $status
