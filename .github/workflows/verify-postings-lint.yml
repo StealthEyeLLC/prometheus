@@ -1,4 +1,4 @@
-name: Verify MemPostings correctness fix
+name: Verify remaining postings failure
 
 on:
   pull_request:
@@ -12,24 +12,13 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - name: Clone correctness branch
+      - name: Run targeted test
         run: |
           export PATH=/opt/hostedtoolcache/go/1.26.4/x64/bin:$PATH
           git clone -q --depth=1 --branch tsdb-mempostings-correctness-fix https://github.com/StealthEyeLLC/prometheus.git repo
-      - name: Run lint
-        working-directory: repo
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b /tmp v2.11.4 >/dev/null
-          /tmp/golangci-lint run ./tsdb/... --timeout=4m
-      - name: Run targeted test
-        working-directory: repo
-        run: go test ./tsdb -run '^TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings$' -count=20
-      - name: Run race test
-        working-directory: repo
-        run: go test -race ./tsdb -run '^TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings$' -count=5
-      - name: Run 32-bit test
-        working-directory: repo
-        run: GOARCH=386 go test ./tsdb -run '^TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings$' -count=5
-      - name: Run dedupelabels test
-        working-directory: repo
-        run: go test --tags=dedupelabels ./tsdb -run '^TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings$' -count=5
+          cd repo
+          set +e
+          go test ./tsdb -run '^TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings$' -count=10 >test.log 2>&1
+          status=$?
+          tail -n 80 test.log
+          exit $status
