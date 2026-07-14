@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - tsdb-mempostings-patch-runner
+  pull_request:
+    branches:
+      - tsdb-mempostings-patch-runner-base
 
 permissions:
   contents: write
