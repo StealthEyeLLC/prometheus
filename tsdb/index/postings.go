@@ -574,22 +574,23 @@ func (p *MemPostings) addFor(id storage.SeriesRef, l labels.Label) {
 		p.lvs[l.Name] = appendWithExponentialGrowth(p.lvs[l.Name], l.Value)
 		p.lvsMtx.Unlock()
 	}
-	list := appendWithExponentialGrowth(vm, id)
-	nm[l.Value] = list
-
-	if !p.ordered {
+	if !p.ordered || len(vm) == 0 || vm[len(vm)-1] <= id {
+		nm[l.Value] = appendWithExponentialGrowth(vm, id)
 		return
 	}
-	// There is no guarantee that no higher ID was inserted before as they may
-	// be generated independently before adding them to postings.
-	// We repair order violations on insert. The invariant is that the first n-1
-	// items in the list are already sorted.
+
+	// Readers keep the old slice after dropping the shard lock. Copy before
+	// moving existing IDs so an active iterator is not changed underfoot.
+	list := make([]storage.SeriesRef, len(vm)+1)
+	copy(list, vm)
+	list[len(vm)] = id
 	for i := len(list) - 1; i >= 1; i-- {
 		if list[i] >= list[i-1] {
 			break
 		}
 		list[i], list[i-1] = list[i-1], list[i]
 	}
+	nm[l.Value] = list
 }
 
 func sameStringSliceData(a, b []string) bool {
