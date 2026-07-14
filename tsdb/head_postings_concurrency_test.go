@@ -54,6 +54,12 @@ func TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings(t *testing.T) 
 				}
 			}()
 
+			snapshotter, ok := ir.(postingsForMatchersSnapshotter)
+			if !ok {
+				reportPostingsLoadError(readerErr, fmt.Errorf("Head index reader does not support matcher snapshots"))
+				return
+			}
+
 			for {
 				select {
 				case <-stopReaders:
@@ -61,7 +67,8 @@ func TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings(t *testing.T) 
 				default:
 				}
 
-				p, err := PostingsForMatchers(t.Context(), ir, early, lateMissing)
+				snapshot := snapshotter.postingsForMatchersSnapshot([]*labels.Matcher{early, lateMissing})
+				p, err := PostingsForMatchers(t.Context(), snapshot, early, lateMissing)
 				if err != nil {
 					reportPostingsLoadError(readerErr, err)
 					return
@@ -120,7 +127,7 @@ func BenchmarkHeadInitialScrapeWithQueries(b *testing.B) {
 	const seriesPerScrape = 200
 
 	for _, queryers := range []int{0, 4} {
-		b.Run("queryers=" + strconv.Itoa(queryers), func(b *testing.B) {
+		b.Run("queryers="+strconv.Itoa(queryers), func(b *testing.B) {
 			opts := DefaultHeadOptions()
 			opts.ChunkRange = 1000
 			opts.ChunkDirRoot = b.TempDir()
@@ -216,14 +223,14 @@ func BenchmarkHeadInitialScrapeWithQueries(b *testing.B) {
 
 func postingsLoadLabels(writer, scrape, series int) labels.Labels {
 	return labels.FromStrings(
-		labels.MetricName, "postings_load_metric_" + strconv.Itoa(series%50),
+		labels.MetricName, "postings_load_metric_"+strconv.Itoa(series%50),
 		"cluster", "test",
 		"early", "present",
-		"instance", "target-" + strconv.Itoa(writer),
+		"instance", "target-"+strconv.Itoa(writer),
 		"job", "postings-load",
 		"late", "present",
-		"namespace", "namespace-" + strconv.Itoa(series%20),
-		"pod", "pod-" + strconv.Itoa(scrape) + "-" + strconv.Itoa(series),
+		"namespace", "namespace-"+strconv.Itoa(series%20),
+		"pod", "pod-"+strconv.Itoa(scrape)+"-"+strconv.Itoa(series),
 		"scrape", strconv.Itoa(scrape),
 		"series", strconv.Itoa(series),
 	)
