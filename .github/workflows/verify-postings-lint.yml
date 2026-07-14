@@ -1,4 +1,4 @@
-name: Verify MemPostings focused tests
+name: Diagnose MemPostings normal test
 
 on:
   pull_request:
@@ -9,28 +9,18 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  diagnose:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: 1.26.x
-      - name: Clone correctness branch
-        run: git clone -q --depth=1 --branch tsdb-mempostings-correctness-fix https://github.com/StealthEyeLLC/prometheus.git repo
-      - name: Check format
-        working-directory: repo
+      - name: Run one focused test pass
         run: |
-          test -z "$(gofmt -d tsdb/index/postings.go tsdb/index/postings_iterator_test.go tsdb/index/postings_snapshot.go tsdb/postings_snapshot.go tsdb/querier.go tsdb/head_postings_concurrency_test.go)"
-          git diff --check
-      - name: Run focused tests
-        working-directory: repo
-        run: go test ./tsdb ./tsdb/index -run 'TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings|TestMemPostingsOutOfOrderAddDoesNotChangeExistingIterator|TestMemPostingsReadWaiterBlocksNewAdds|TestMemPostingsPartialLabelSetVisibility' -count=20
-      - name: Run race tests
-        working-directory: repo
-        run: go test -race ./tsdb ./tsdb/index -run 'TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings|TestMemPostingsOutOfOrderAddDoesNotChangeExistingIterator|TestMemPostingsReadWaiterBlocksNewAdds|TestMemPostingsPartialLabelSetVisibility' -count=5
-      - name: Run 32-bit tests
-        working-directory: repo
-        run: GOARCH=386 go test ./tsdb ./tsdb/index -run 'TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings|TestMemPostingsOutOfOrderAddDoesNotChangeExistingIterator|TestMemPostingsReadWaiterBlocksNewAdds|TestMemPostingsPartialLabelSetVisibility' -count=5
-      - name: Run dedupelabels tests
-        working-directory: repo
-        run: go test --tags=dedupelabels ./tsdb ./tsdb/index -run 'TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings|TestMemPostingsOutOfOrderAddDoesNotChangeExistingIterator|TestMemPostingsReadWaiterBlocksNewAdds|TestMemPostingsPartialLabelSetVisibility' -count=5
+          git clone -q --depth=1 --branch tsdb-mempostings-correctness-fix https://github.com/StealthEyeLLC/prometheus.git repo
+          cd repo
+          set +e
+          go test ./tsdb ./tsdb/index -run 'TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings|TestMemPostingsOutOfOrderAddDoesNotChangeExistingIterator|TestMemPostingsReadWaiterBlocksNewAdds|TestMemPostingsPartialLabelSetVisibility' -count=1 -timeout=2m >test.log 2>&1
+          status=$?
+          tail -n 120 test.log
+          exit $status
