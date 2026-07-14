@@ -12,9 +12,9 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          persist-credentials: false
-          show-progress: false
       - name: Check format
-        run: gofmt -d tsdb/head_postings_concurrency_test.go && test -z "$(gofmt -d tsdb/head_postings_concurrency_test.go)"
+        run: |
+          git clone -q --depth=1 --branch tsdb-mempostings-phase-shards https://github.com/StealthEyeLLC/prometheus.git repo
+          cd repo
+          gofmt -d tsdb/head_postings_concurrency_test.go
+          test -z "$(gofmt -d tsdb/head_postings_concurrency_test.go)"
