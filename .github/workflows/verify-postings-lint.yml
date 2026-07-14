@@ -12,13 +12,11 @@ jobs:
   apply:
     runs-on: ubuntu-latest
     steps:
-      - name: Patch correctness branch
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: tsdb-mempostings-correctness-fix
+      - name: Patch querier
         run: |
-          export PATH=/opt/hostedtoolcache/go/1.26.4/x64/bin:$PATH
-          git clone -q --branch tsdb-mempostings-correctness-fix https://x-access-token:${GH_TOKEN}@github.com/StealthEyeLLC/prometheus.git repo
-          cd repo
           python3 - <<'PY'
           from pathlib import Path
 
@@ -40,6 +38,8 @@ jobs:
           PY
           gofmt -w tsdb/querier.go
           git diff --check
+      - name: Commit and push
+        run: |
           git config user.name StealthEyeLLC
           git config user.email 247854506+StealthEyeLLC@users.noreply.github.com
           git add tsdb/querier.go
