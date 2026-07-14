@@ -1,0 +1,238 @@
+name: Patch MemPostings live path
+
+on:
+  push:
+    branches:
+      - tsdb-mempostings-patch-runner-v2
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: tsdb-mempostings-live-path-fix
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: 1.26.x
+          cache-dependency-path: go.sum
+      - name: Apply live-path fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          postings = Path("tsdb/index/postings.go")
+          text = postings.read_text()
+
+          old = '''\tclose(workc)
+\twg.Wait()
+
+\tp.ordered = true
+}
+
+// Delete removes all ids in the given map from the postings lists.
+'''
+          new = '''\tclose(workc)
+\twg.Wait()
+
+\tp.enableSharding()
+\tp.ordered = true
+}
+
+// enableSharding moves replay-built postings into the live shards without
+// copying the postings lists. The caller must hold the exclusive phase.
+func (p *MemPostings) enableSharding() {
+\tif p.sharded {
+\t\treturn
+\t}
+
+\tvar sharded [memPostingsShardCount]map[string]map[string][]storage.SeriesRef
+\tfor i := range sharded {
+\t\tsharded[i] = make(map[string]map[string][]storage.SeriesRef, defaultLabelNamesMapSize/memPostingsShardCount+1)
+\t}
+
+\tfor i := range p.shards {
+\t\tfor name, values := range p.shards[i].m {
+\t\t\tfor value, refs := range values {
+\t\t\t\tshardIndex := memPostingsShardIndex(name, value)
+\t\t\t\tbyName := sharded[shardIndex][name]
+\t\t\t\tif byName == nil {
+\t\t\t\t\tbyName = map[string][]storage.SeriesRef{}
+\t\t\t\t\tsharded[shardIndex][name] = byName
+\t\t\t\t}
+\t\t\t\tbyName[value] = refs
+\t\t\t}
+\t\t}
+\t}
+
+\tfor i := range p.shards {
+\t\tp.shards[i].m = sharded[i]
+\t}
+\tp.sharded = true
+}
+
+// Delete removes all ids in the given map from the postings lists.
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one EnsureOrder tail, found {text.count(old)}")
+          text = text.replace(old, new)
+
+          old = '''\tlist := appendWithExponentialGrowth(vm, id)
+\tnm[l.Value] = list
+
+\tif !p.ordered {
+\t\treturn
+\t}
+\t// There is no guarantee that no higher ID was inserted before as they may
+\t// be generated independently before adding them to postings.
+\t// We repair order violations on insert. The invariant is that the first n-1
+\t// items in the list are already sorted.
+\tfor i := len(list) - 1; i >= 1; i-- {
+\t\tif list[i] >= list[i-1] {
+\t\t\tbreak
+\t\t}
+\t\tlist[i], list[i-1] = list[i-1], list[i]
+\t}
+'''
+          new = '''\tif !p.ordered || len(vm) == 0 || vm[len(vm)-1] <= id {
+\t\tnm[l.Value] = appendWithExponentialGrowth(vm, id)
+\t\treturn
+\t}
+
+\t// Existing iterators retain the old slice after the shard lock is released.
+\t// Copy before moving IDs so a later out-of-order insert cannot change them.
+\tlist := make([]storage.SeriesRef, len(vm)+1, len(vm)*exponentialSliceGrowthFactor+1)
+\tcopy(list, vm)
+\tlist[len(vm)] = id
+\tfor i := len(list) - 1; i >= 1; i-- {
+\t\tif list[i] >= list[i-1] {
+\t\t\tbreak
+\t\t}
+\t\tlist[i], list[i-1] = list[i-1], list[i]
+\t}
+\tnm[l.Value] = list
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one ordered insertion block, found {text.count(old)}")
+          postings.write_text(text.replace(old, new))
+
+          test = Path("tsdb/head_postings_concurrency_test.go")
+          text = test.read_text()
+          old = '''\th, err := NewHead(nil, nil, nil, nil, opts, nil)
+\trequire.NoError(t, err)
+\tt.Cleanup(func() { require.NoError(t, h.Close()) })
+
+\tearly := labels.MustNewMatcher(labels.MatchEqual, "early", "present")
+'''
+          new = '''\th, err := NewHead(nil, nil, nil, nil, opts, nil)
+\trequire.NoError(t, err)
+\tt.Cleanup(func() { require.NoError(t, h.Close()) })
+\trequire.NoError(t, h.Init(0))
+
+\tearly := labels.MustNewMatcher(labels.MatchEqual, "early", "present")
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one Head test setup, found {text.count(old)}")
+          text = text.replace(old, new)
+
+          old = '''\t\t\th, err := NewHead(nil, nil, nil, nil, opts, nil)
+\t\t\trequire.NoError(b, err)
+\t\t\tdefer func() { require.NoError(b, h.Close()) }()
+
+\t\t\tearly := labels.MustNewMatcher(labels.MatchEqual, "early", "present")
+'''
+          new = '''\t\t\th, err := NewHead(nil, nil, nil, nil, opts, nil)
+\t\t\trequire.NoError(b, err)
+\t\t\tdefer func() { require.NoError(b, h.Close()) }()
+\t\t\trequire.NoError(b, h.Init(0))
+
+\t\t\tearly := labels.MustNewMatcher(labels.MatchEqual, "early", "present")
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one Head benchmark setup, found {text.count(old)}")
+          test.write_text(text.replace(old, new))
+
+          postings_test = Path("tsdb/index/postings_test.go")
+          text = postings_test.read_text()
+          old = '''\tp.EnsureOrder(0)
+
+\trequire.NoError(t, p.Iter(func(_ labels.Label, postings Postings) error {
+'''
+          new = '''\tp.EnsureOrder(0)
+
+\trequire.True(t, p.sharded)
+\tnonEmptyShards := 0
+\tfor i := range p.shards {
+\t\tif len(p.shards[i].m) > 0 {
+\t\t\tnonEmptyShards++
+\t\t}
+\t}
+\trequire.Greater(t, nonEmptyShards, 1)
+
+\trequire.NoError(t, p.Iter(func(_ labels.Label, postings Postings) error {
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one EnsureOrder assertion point, found {text.count(old)}")
+          postings_test.write_text(text.replace(old, new))
+
+          iterator_test = Path("tsdb/index/postings_iterator_test.go")
+          iterator_test.write_text('''// Copyright The Prometheus Authors
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package index
+
+import (
+\t"testing"
+
+\t"github.com/stretchr/testify/require"
+
+\t"github.com/prometheus/prometheus/model/labels"
+\t"github.com/prometheus/prometheus/storage"
+)
+
+func TestMemPostingsOutOfOrderAddDoesNotChangeExistingIterator(t *testing.T) {
+\tp := NewMemPostings()
+\tlset := labels.FromStrings("a", "x")
+\tp.Add(2, lset)
+\tp.Add(3, lset)
+
+\tbefore := p.Postings(t.Context(), "a", "x")
+\tp.Add(1, lset)
+
+\tbeforeRefs, err := ExpandPostings(before)
+\trequire.NoError(t, err)
+\trequire.Equal(t, []storage.SeriesRef{2, 3}, beforeRefs)
+
+\tafterRefs, err := ExpandPostings(p.Postings(t.Context(), "a", "x"))
+\trequire.NoError(t, err)
+\trequire.Equal(t, []storage.SeriesRef{1, 2, 3}, afterRefs)
+}
+''')
+          PY
+          gofmt -w tsdb/index/postings.go tsdb/index/postings_test.go tsdb/index/postings_iterator_test.go tsdb/head_postings_concurrency_test.go
+          git diff --check
+      - name: Run focused tests
+        run: |
+          go test ./tsdb/index -run 'TestMemPostings_(addFor|ensureOrder)|TestMemPostingsOutOfOrderAddDoesNotChangeExistingIterator|TestMemPostingsReadWaiterBlocksNewAdds|TestMemPostingsPartialLabelSetVisibility' -count=1
+          go test ./tsdb -run '^TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings$' -count=1 -timeout=2m
+      - name: Commit and push
+        run: |
+          git config user.name StealthEyeLLC
+          git config user.email 247854506+StealthEyeLLC@users.noreply.github.com
+          git add tsdb/index/postings.go tsdb/index/postings_test.go tsdb/index/postings_iterator_test.go tsdb/head_postings_concurrency_test.go
+          git commit -m "tsdb: activate sharded postings after replay" -m "Signed-off-by: StealthEyeLLC <247854506+StealthEyeLLC@users.noreply.github.com>"
+          git push origin HEAD:tsdb-mempostings-live-path-fix
