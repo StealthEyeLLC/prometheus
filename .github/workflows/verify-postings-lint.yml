@@ -22,5 +22,5 @@ jobs:
           set +e
           go test ./tsdb ./tsdb/index -run 'TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings|TestMemPostingsOutOfOrderAddDoesNotChangeExistingIterator|TestMemPostingsReadWaiterBlocksNewAdds|TestMemPostingsPartialLabelSetVisibility' -count=1 -timeout=2m >test.log 2>&1
           status=$?
-          tail -n 120 test.log
+          tail -n 20 test.log
           exit $status
