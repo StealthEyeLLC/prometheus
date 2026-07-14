@@ -1,0 +1,72 @@
+name: Apply MemPostings correctness fix
+
+on:
+  push:
+    branches:
+      - tsdb-mempostings-patch-runner
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: tsdb-mempostings-correctness-fix
+      - name: Apply fix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("tsdb/index/postings.go")
+          text = path.read_text()
+          old = '''\tlist := appendWithExponentialGrowth(vm, id)
+          \tnm[l.Value] = list
+
+          \tif !p.ordered {
+          \t\treturn
+          \t}
+          \t// There is no guarantee that no higher ID was inserted before as they may
+          \t// be generated independently before adding them to postings.
+          \t// We repair order violations on insert. The invariant is that the first n-1
+          \t// items in the list are already sorted.
+          \tfor i := len(list) - 1; i >= 1; i-- {
+          \t\tif list[i] >= list[i-1] {
+          \t\t\tbreak
+          \t\t}
+          \t\tlist[i], list[i-1] = list[i-1], list[i]
+          \t}
+          '''
+          new = '''\tif !p.ordered || len(vm) == 0 || vm[len(vm)-1] <= id {
+          \t\tnm[l.Value] = appendWithExponentialGrowth(vm, id)
+          \t\treturn
+          \t}
+
+          \t// Readers keep the old slice after dropping the shard lock. Copy before
+          \t// moving existing IDs so an active iterator is not changed underfoot.
+          \tlist := make([]storage.SeriesRef, len(vm)+1)
+          \tcopy(list, vm)
+          \tlist[len(vm)] = id
+          \tfor i := len(list) - 1; i >= 1; i-- {
+          \t\tif list[i] >= list[i-1] {
+          \t\t\tbreak
+          \t\t}
+          \t\tlist[i], list[i-1] = list[i-1], list[i]
+          \t}
+          \tnm[l.Value] = list
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one addFor block, found {text.count(old)}")
+          path.write_text(text.replace(old, new))
+          PY
+          gofmt -w tsdb/index/postings.go
+          git diff --check
+      - name: Commit fix
+        run: |
+          git config user.name StealthEyeLLC
+          git config user.email 247854506+StealthEyeLLC@users.noreply.github.com
+          git add tsdb/index/postings.go
+          git commit -m "tsdb: keep active postings iterators stable" -m "Signed-off-by: StealthEyeLLC <247854506+StealthEyeLLC@users.noreply.github.com>"
+          git push origin HEAD:tsdb-mempostings-correctness-fix
