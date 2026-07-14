@@ -1,4 +1,4 @@
-name: Apply MemPostings correctness fix
+name: Simplify MemPostings comments
 
 on:
   push:
@@ -15,58 +15,119 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: tsdb-mempostings-correctness-fix
-      - name: Apply fix
+      - name: Simplify comments
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
           path = Path("tsdb/index/postings.go")
           text = path.read_text()
-          old = '''\tlist := appendWithExponentialGrowth(vm, id)
-          \tnm[l.Value] = list
-
-          \tif !p.ordered {
-          \t\treturn
-          \t}
-          \t// There is no guarantee that no higher ID was inserted before as they may
-          \t// be generated independently before adding them to postings.
-          \t// We repair order violations on insert. The invariant is that the first n-1
-          \t// items in the list are already sorted.
-          \tfor i := len(list) - 1; i >= 1; i-- {
-          \t\tif list[i] >= list[i-1] {
-          \t\t\tbreak
-          \t\t}
-          \t\tlist[i], list[i-1] = list[i-1], list[i]
-          \t}
-          '''
-          new = '''\tif !p.ordered || len(vm) == 0 || vm[len(vm)-1] <= id {
-          \t\tnm[l.Value] = appendWithExponentialGrowth(vm, id)
-          \t\treturn
-          \t}
-
-          \t// Readers keep the old slice after dropping the shard lock. Copy before
-          \t// moving existing IDs so an active iterator is not changed underfoot.
-          \tlist := make([]storage.SeriesRef, len(vm)+1)
-          \tcopy(list, vm)
-          \tlist[len(vm)] = id
-          \tfor i := len(list) - 1; i >= 1; i-- {
-          \t\tif list[i] >= list[i-1] {
-          \t\t\tbreak
-          \t\t}
-          \t\tlist[i], list[i-1] = list[i-1], list[i]
-          \t}
-          \tnm[l.Value] = list
-          '''
-          if text.count(old) != 1:
-              raise SystemExit(f"expected one addFor block, found {text.count(old)}")
-          path.write_text(text.replace(old, new))
+          replacements = [
+              (
+                  '''// postingsPhaseGate separates MemPostings operations into add, read, and
+// exclusive phases. A phase is the part of an operation that observes or
+// publishes postings state across shards. The gate does not replace shard
+// locks; shard locks still protect shard-local maps and slices.
+//
+// The gate keeps read snapshots out of the middle of a multi-label Add. A
+// reader may see the postings before an Add or after it, but not after only
+// some label pairs for that series have been published. Waiting readers block
+// new adders so an active Add phase can drain. Exclusive waiters block new
+// readers and adders so Delete and EnsureOrder do not starve.
+''',
+                  '''// postingsPhaseGate keeps reads out of an Add. Adds may run together,
+// as may reads. Delete and EnsureOrder run alone.
+''',
+              ),
+              (
+                  '''// beginAdd waits until there are no active reads or exclusive operations. It
+// also waits behind pending readers and exclusive operations so the current
+// phase can drain.
+''',
+                  '''// Later Adds wait behind queued readers and exclusive operations.
+''',
+              ),
+              (
+                  '''// beginRead waits for active Adds because a read can snapshot multiple shards
+// and label-value metadata. It registers as a waiter before blocking so later
+// Adds cannot keep extending the active Add phase. Pending exclusive operations
+// retain priority over waiting readers.
+''',
+                  '''// A waiting reader blocks later Adds so the current Add group can finish.
+''',
+              ),
+              (
+                  '''// beginExclusive is used by Delete and EnsureOrder. It marks an exclusive
+// waiter before waiting so new Adds and reads do not enter, then waits for
+// current Adds, reads, and any active exclusive operation to finish.
+''',
+                  '''// Register before waiting so later reads and Adds queue behind us.
+''',
+              ),
+              (
+                  '''// yieldExclusive briefly drops the exclusive phase during long Delete work.
+// Readers and adders that are blocked on the gate can run between batches.
+// beginExclusive is called again afterwards, so later readers and adders queue
+// behind the Delete instead of starving it.
+''',
+                  '''// Let queued reads and Adds run between Delete batches.
+''',
+              ),
+              (
+                  '''\t// lvs holds all known values for each label name. It lets label-value
+\t// queries avoid scanning every shard to discover values. Add updates lvs
+\t// while readers are excluded by the phase gate.
+''',
+                  '''\t// lvs avoids scanning every shard to list a label's values.
+''',
+              ),
+              (
+                  '''// Add a label set to the postings index. The whole label set, including the
+// all-postings entry, is published in one Add phase. This keeps readers from
+// observing a series through one label matcher but not another matcher from the
+// same label set.
+''',
+                  '''// Add inserts id into each label posting and the all-series posting.
+''',
+              ),
+              (
+                  '''// postingsForLabelValues assumes the caller is in a read phase. Shard locks
+// protect shard-local postings, and the read phase protects the cross-shard
+// snapshot from overlapping a multi-label Add.
+''',
+                  '''// postingsForLabelValues is called while a read phase is active.
+''',
+              ),
+              (
+                  '''// postingsForAllLabelValues assumes the caller is in a read phase. Shard locks
+// protect shard-local postings, and the read phase protects the cross-shard
+// snapshot from overlapping a multi-label Add.
+''',
+                  '''// postingsForAllLabelValues is called while a read phase is active.
+''',
+              ),
+              (
+                  '''// postingsForAllLabelValuesIfUnchanged enters a read phase and verifies that
+// the label-value slice captured before matching is still current before reading
+// postings for all values.
+''',
+                  '''// postingsForAllLabelValuesIfUnchanged returns false if values changed while matching.
+''',
+              ),
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one comment block, found {count}: {old.splitlines()[0]}")
+              text = text.replace(old, new)
+          path.write_text(text)
           PY
           gofmt -w tsdb/index/postings.go
           git diff --check
-      - name: Commit fix
+      - name: Commit comments
         run: |
           git config user.name StealthEyeLLC
           git config user.email 247854506+StealthEyeLLC@users.noreply.github.com
           git add tsdb/index/postings.go
-          git commit -m "tsdb: keep active postings iterators stable" -m "Signed-off-by: StealthEyeLLC <247854506+StealthEyeLLC@users.noreply.github.com>"
+          git commit -m "tsdb: simplify MemPostings comments" -m "Signed-off-by: StealthEyeLLC <247854506+StealthEyeLLC@users.noreply.github.com>"
           git push origin HEAD:tsdb-mempostings-correctness-fix
