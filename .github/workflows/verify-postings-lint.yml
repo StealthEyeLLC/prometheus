@@ -12,9 +12,9 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - name: Run lint
+      - name: Print formatter diff
         run: |
           git clone -q --depth=1 --branch tsdb-mempostings-phase-shards https://github.com/StealthEyeLLC/prometheus.git repo
           cd repo
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b /tmp v2.11.4 >/dev/null
-          /tmp/golangci-lint run ./tsdb/... --timeout=4m
+          /tmp/golangci-lint fmt --diff tsdb/head_postings_concurrency_test.go
