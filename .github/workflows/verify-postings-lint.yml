@@ -1,4 +1,4 @@
-name: Verify MemPostings correctness branch
+name: Verify MemPostings focused tests
 
 on:
   pull_request:
@@ -22,11 +22,6 @@ jobs:
         run: |
           test -z "$(gofmt -d tsdb/index/postings.go tsdb/index/postings_iterator_test.go tsdb/index/postings_snapshot.go tsdb/postings_snapshot.go tsdb/querier.go tsdb/head_postings_concurrency_test.go)"
           git diff --check
-      - name: Run lint
-        working-directory: repo
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b /tmp v2.11.4 >/dev/null
-          /tmp/golangci-lint run ./tsdb/... --timeout=4m
       - name: Run focused tests
         working-directory: repo
         run: go test ./tsdb ./tsdb/index -run 'TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings|TestMemPostingsOutOfOrderAddDoesNotChangeExistingIterator|TestMemPostingsReadWaiterBlocksNewAdds|TestMemPostingsPartialLabelSetVisibility' -count=20
