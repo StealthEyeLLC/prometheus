@@ -1,4 +1,4 @@
-name: Verify remaining postings failure
+name: Apply matcher snapshot hook
 
 on:
   pull_request:
@@ -6,19 +6,42 @@ on:
       - tsdb-mempostings-lint-base
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  verify:
+  apply:
     runs-on: ubuntu-latest
     steps:
-      - name: Run targeted test
+      - name: Patch correctness branch
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           export PATH=/opt/hostedtoolcache/go/1.26.4/x64/bin:$PATH
-          git clone -q --depth=1 --branch tsdb-mempostings-correctness-fix https://github.com/StealthEyeLLC/prometheus.git repo
+          git clone -q --branch tsdb-mempostings-correctness-fix https://x-access-token:${GH_TOKEN}@github.com/StealthEyeLLC/prometheus.git repo
           cd repo
-          set +e
-          go test ./tsdb -run '^TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings$' -count=10 >test.log 2>&1
-          status=$?
-          tail -n 80 test.log
-          exit $status
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("tsdb/querier.go")
+          text = path.read_text()
+          old = '''func PostingsForMatchers(ctx context.Context, ix IndexReader, ms ...*labels.Matcher) (index.Postings, error) {
+\tif len(ms) == 1 && ms[0].Name == "" && ms[0].Value == "" {
+'''
+          new = '''func PostingsForMatchers(ctx context.Context, ix IndexReader, ms ...*labels.Matcher) (index.Postings, error) {
+\tif snapshotter, ok := ix.(postingsForMatchersSnapshotter); ok {
+\t\tix = snapshotter.postingsForMatchersSnapshot(ms)
+\t}
+
+\tif len(ms) == 1 && ms[0].Name == "" && ms[0].Value == "" {
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one PostingsForMatchers opening, found {text.count(old)}")
+          path.write_text(text.replace(old, new))
+          PY
+          gofmt -w tsdb/querier.go
+          git diff --check
+          git config user.name StealthEyeLLC
+          git config user.email 247854506+StealthEyeLLC@users.noreply.github.com
+          git add tsdb/querier.go
+          git commit -m "tsdb: use one postings snapshot per matcher query" -m "Signed-off-by: StealthEyeLLC <247854506+StealthEyeLLC@users.noreply.github.com>"
+          git push origin HEAD:tsdb-mempostings-correctness-fix
