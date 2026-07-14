@@ -24,7 +24,6 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/prometheus/prometheus/model/labels"
-	"github.com/prometheus/prometheus/storage"
 )
 
 func TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings(t *testing.T) {
@@ -36,8 +35,8 @@ func TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings(t *testing.T) 
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
 
-	job := labels.MustNewMatcher(labels.MatchEqual, "job", "postings-load")
-	wrongCluster := labels.MustNewMatcher(labels.MatchNotEqual, "cluster", "test")
+	early := labels.MustNewMatcher(labels.MatchEqual, "early", "present")
+	lateMissing := labels.MustNewMatcher(labels.MatchNotEqual, "late", "present")
 
 	stopReaders := make(chan struct{})
 	readerErr := make(chan error, 1)
@@ -49,7 +48,11 @@ func TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings(t *testing.T) 
 				reportPostingsLoadError(readerErr, err)
 				return
 			}
-			defer ir.Close()
+			defer func() {
+				if err := ir.Close(); err != nil {
+					reportPostingsLoadError(readerErr, err)
+				}
+			}()
 
 			for {
 				select {
@@ -58,7 +61,7 @@ func TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings(t *testing.T) 
 				default:
 				}
 
-				p, err := PostingsForMatchers(context.Background(), ir, job, wrongCluster)
+				p, err := PostingsForMatchers(context.Background(), ir, early, lateMissing)
 				if err != nil {
 					reportPostingsLoadError(readerErr, err)
 					return
@@ -76,7 +79,7 @@ func TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings(t *testing.T) 
 	}
 
 	const (
-		writerCount     = 8
+		writerCount      = 8
 		scrapesPerWriter = 20
 		seriesPerScrape  = 200
 	)
@@ -129,8 +132,8 @@ func BenchmarkHeadInitialScrapeWithQueries(b *testing.B) {
 			require.NoError(b, err)
 			defer func() { require.NoError(b, h.Close()) }()
 
-			job := labels.MustNewMatcher(labels.MatchEqual, "job", "postings-load")
-			wrongCluster := labels.MustNewMatcher(labels.MatchNotEqual, "cluster", "test")
+			early := labels.MustNewMatcher(labels.MatchEqual, "early", "present")
+			lateMissing := labels.MustNewMatcher(labels.MatchNotEqual, "late", "present")
 			ctx, cancel := context.WithCancel(b.Context())
 			defer cancel()
 
@@ -144,10 +147,14 @@ func BenchmarkHeadInitialScrapeWithQueries(b *testing.B) {
 						reportPostingsLoadError(queryErr, err)
 						return
 					}
-					defer ir.Close()
+					defer func() {
+						if err := ir.Close(); err != nil {
+							reportPostingsLoadError(queryErr, err)
+						}
+					}()
 
 					for ctx.Err() == nil {
-						p, err := PostingsForMatchers(ctx, ir, job, wrongCluster)
+						p, err := PostingsForMatchers(ctx, ir, early, lateMissing)
 						if err != nil {
 							if ctx.Err() == nil {
 								reportPostingsLoadError(queryErr, err)
@@ -210,13 +217,15 @@ func BenchmarkHeadInitialScrapeWithQueries(b *testing.B) {
 func postingsLoadLabels(writer, scrape, series int) labels.Labels {
 	return labels.FromStrings(
 		labels.MetricName, "postings_load_metric_"+strconv.Itoa(series%50),
-		"job", "postings-load",
 		"cluster", "test",
+		"early", "present",
 		"instance", "target-"+strconv.Itoa(writer),
-		"scrape", strconv.Itoa(scrape),
-		"series", strconv.Itoa(series),
+		"job", "postings-load",
+		"late", "present",
 		"namespace", "namespace-"+strconv.Itoa(series%20),
 		"pod", "pod-"+strconv.Itoa(scrape)+"-"+strconv.Itoa(series),
+		"scrape", strconv.Itoa(scrape),
+		"series", strconv.Itoa(series),
 	)
 }
 
@@ -226,5 +235,3 @@ func reportPostingsLoadError(ch chan<- error, err error) {
 	default:
 	}
 }
-
-var _ storage.SeriesRef
