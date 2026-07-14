@@ -1071,6 +1071,9 @@ func (p *populateWithDelChunkSeriesIterator) populateChunksFromIterable() bool {
 			chunkBytes := len(currentChunk.Bytes())
 			switch currentValueType {
 			case chunkenc.ValFloat:
+				// In the TSDB head we also take into account the number of samples, but here we want to keep it
+				// simple and consistent with histograms. Also the size limit is checked before sample limit in
+				// the head as well.
 				cutNewChunk = chunkBytes > chunkenc.MaxBytesPerXORChunkBeforeAppend
 			case chunkenc.ValHistogram, chunkenc.ValFloatHistogram:
 				cutNewChunk = chunkBytes > chunkenc.TargetBytesPerHistogramChunk &&
@@ -1102,12 +1105,16 @@ func (p *populateWithDelChunkSeriesIterator) populateChunksFromIterable() bool {
 			{
 				var v *histogram.Histogram
 				t, v = p.currDelIter.AtHistogram(nil)
+				// No need to set prevApp as AppendHistogram will set the
+				// counter reset header for the appender that's returned.
 				newChunk, recoded, app, err = app.AppendHistogram(nil, st, t, v, false)
 			}
 		case chunkenc.ValFloatHistogram:
 			{
 				var v *histogram.FloatHistogram
 				t, v = p.currDelIter.AtFloatHistogram(nil)
+				// No need to set prevApp as AppendHistogram will set the
+				// counter reset header for the appender that's returned.
 				newChunk, recoded, app, err = app.AppendFloatHistogram(nil, st, t, v, false)
 			}
 		}
@@ -1174,6 +1181,7 @@ func newBlockSeriesSet(i IndexReader, c ChunkReader, t tombstones.Reader, p inde
 }
 
 func (b *blockSeriesSet) At() storage.Series {
+	// At can be looped over before iterating, so save the current values locally.
 	return &blockSeriesEntry{
 		chunks:     b.chunks,
 		blockID:    b.blockID,
@@ -1181,6 +1189,9 @@ func (b *blockSeriesSet) At() storage.Series {
 	}
 }
 
+// blockChunkSeriesSet allows to iterate over sorted, populated series with applied tombstones.
+// Series with all deleted chunks are still present as Labelled iterator with no chunks.
+// Chunks are also trimmed to requested [min and max] (keeping samples with min and max timestamps).
 type blockChunkSeriesSet struct {
 	blockBaseSeriesSet
 }
@@ -1201,6 +1212,7 @@ func NewBlockChunkSeriesSet(id ulid.ULID, i IndexReader, c ChunkReader, t tombst
 }
 
 func (b *blockChunkSeriesSet) At() storage.ChunkSeries {
+	// At can be looped over before iterating, so save the current values locally.
 	return &chunkSeriesEntry{
 		chunks:     b.chunks,
 		blockID:    b.blockID,
@@ -1208,6 +1220,7 @@ func (b *blockChunkSeriesSet) At() storage.ChunkSeries {
 	}
 }
 
+// NewMergedStringIter returns string iterator that allows to merge symbols on demand and stream result.
 func NewMergedStringIter(a, b index.StringIter) index.StringIter {
 	return &mergedStringIter{a: a, b: b, aok: a.Next(), bok: b.Next()}
 }
@@ -1241,7 +1254,7 @@ func (m *mergedStringIter) Next() bool {
 		m.cur = m.b.At()
 		m.bok = m.b.Next()
 		m.err = m.b.Err()
-	default:
+	default: // Equal.
 		m.cur = m.b.At()
 		m.aok = m.a.Next()
 		m.err = m.a.Err()
@@ -1250,18 +1263,25 @@ func (m *mergedStringIter) Next() bool {
 			m.err = m.b.Err()
 		}
 	}
+
 	return true
 }
-
 func (m mergedStringIter) At() string { return m.cur }
-func (m mergedStringIter) Err() error { return m.err }
+func (m mergedStringIter) Err() error {
+	return m.err
+}
 
+// DeletedIterator wraps chunk Iterator and makes sure any deleted metrics are not returned.
 type DeletedIterator struct {
-	Iter      chunkenc.Iterator
+	// Iter is an Iterator to be wrapped.
+	Iter chunkenc.Iterator
+	// Intervals are the deletion intervals.
 	Intervals tombstones.Intervals
 }
 
-func (it *DeletedIterator) At() (int64, float64) { return it.Iter.At() }
+func (it *DeletedIterator) At() (int64, float64) {
+	return it.Iter.At()
+}
 
 func (it *DeletedIterator) AtHistogram(h *histogram.Histogram) (int64, *histogram.Histogram) {
 	t, h := it.Iter.AtHistogram(h)
@@ -1273,8 +1293,14 @@ func (it *DeletedIterator) AtFloatHistogram(fh *histogram.FloatHistogram) (int64
 	return t, h
 }
 
-func (it *DeletedIterator) AtT() int64 { return it.Iter.AtT() }
-func (it *DeletedIterator) AtST() int64 { return it.Iter.AtST() }
+func (it *DeletedIterator) AtT() int64 {
+	return it.Iter.AtT()
+}
+
+// AtST TODO(krajorama,ywwg): test AtST() when chunks support it.
+func (it *DeletedIterator) AtST() int64 {
+	return it.Iter.AtST()
+}
 
 func (it *DeletedIterator) Seek(t int64) chunkenc.ValueType {
 	if it.Iter.Err() != nil {
@@ -1285,17 +1311,23 @@ func (it *DeletedIterator) Seek(t int64) chunkenc.ValueType {
 		return chunkenc.ValNone
 	}
 
+	// Now double check if the entry falls into a deleted interval.
 	ts := it.AtT()
 	for _, itv := range it.Intervals {
 		if ts < itv.Mint {
 			return valueType
 		}
+
 		if ts > itv.Maxt {
 			it.Intervals = it.Intervals[1:]
 			continue
 		}
+
+		// We're in the middle of an interval, we can now call Next().
 		return it.Next()
 	}
+
+	// The timestamp is greater than all the deleted intervals.
 	return valueType
 }
 
@@ -1307,6 +1339,7 @@ Outer:
 			if tr.InBounds(ts) {
 				continue Outer
 			}
+
 			if ts <= tr.Maxt {
 				return valueType
 			}
@@ -1324,7 +1357,9 @@ type nopChunkReader struct {
 }
 
 func newNopChunkReader() ChunkReader {
-	return nopChunkReader{emptyChunk: chunkenc.NewXORChunk()}
+	return nopChunkReader{
+		emptyChunk: chunkenc.NewXORChunk(),
+	}
 }
 
 func (cr nopChunkReader) ChunkOrIterable(chunks.Meta) (chunkenc.Chunk, chunkenc.Iterable, error) {
