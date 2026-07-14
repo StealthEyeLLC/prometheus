@@ -1,4 +1,4 @@
-name: Diagnose Head postings error
+name: Diagnose manual postings snapshot
 
 on:
   pull_request:
@@ -18,11 +18,45 @@ jobs:
         with:
           go-version: 1.26.x
           cache-dependency-path: repo/go.sum
+      - name: Patch test to use snapshot explicitly
+        run: |
+          cd repo
+          python3 - <<'PY'
+          from pathlib import Path
+
+          querier = Path("tsdb/querier.go")
+          text = querier.read_text()
+          hook = '''\tif snapshotter, ok := ix.(postingsForMatchersSnapshotter); ok {
+\t\tix = snapshotter.postingsForMatchersSnapshot(ms)
+\t}
+
+'''
+          if text.count(hook) != 1:
+              raise SystemExit(f"expected one automatic snapshot hook, found {text.count(hook)}")
+          querier.write_text(text.replace(hook, ""))
+
+          test = Path("tsdb/head_postings_concurrency_test.go")
+          text = test.read_text()
+          old = '''\t\t\tp, err := PostingsForMatchers(t.Context(), ir, early, lateMissing)
+'''
+          new = '''\t\t\tsnapshotter, ok := ir.(postingsForMatchersSnapshotter)
+\t\t\tif !ok {
+\t\t\t\treportPostingsLoadError(readerErr, fmt.Errorf("%T does not implement postingsForMatchersSnapshotter", ir))
+\t\t\t\treturn
+\t\t\t}
+\t\t\tsnapshotReader := snapshotter.postingsForMatchersSnapshot([]*labels.Matcher{early, lateMissing})
+\t\t\tp, err := PostingsForMatchers(t.Context(), snapshotReader, early, lateMissing)
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one Head query call, found {text.count(old)}")
+          test.write_text(text.replace(old, new))
+          PY
+          gofmt -w tsdb/querier.go tsdb/head_postings_concurrency_test.go
       - name: Run Head test
         run: |
           cd repo
           set +e
           go test ./tsdb -run '^TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings$' -count=1 -timeout=2m >test.log 2>&1
           status=$?
-          grep -E 'FAIL:|Error Trace:|Error:|Test:|series [0-9]+|panic: test timed out' test.log || true
+          grep -E 'FAIL:|Error Trace:|Error:|Test:|series [0-9]+|does not implement|panic: test timed out|^ok ' test.log || true
           exit $status
