@@ -17,4 +17,8 @@ jobs:
           export PATH=/opt/hostedtoolcache/go/1.26.4/x64/bin:$PATH
           git clone -q --depth=1 --branch tsdb-mempostings-phase-shards https://github.com/StealthEyeLLC/prometheus.git repo
           cd repo
-          go test ./tsdb -run '^TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings$' -count=10
+          set +e
+          go test ./tsdb -run '^TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings$' -count=10 >test.log 2>&1
+          status=$?
+          tail -n 80 test.log
+          exit $status
