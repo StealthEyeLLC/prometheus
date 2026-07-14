@@ -1,4 +1,4 @@
-name: Repair matcher snapshot hook
+name: Verify MemPostings correctness branch
 
 on:
   pull_request:
@@ -6,44 +6,36 @@ on:
       - tsdb-mempostings-lint-base
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  repair:
+  verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          ref: tsdb-mempostings-correctness-fix
-          fetch-depth: 0
-      - name: Restore and patch querier
+          go-version: 1.26.x
+      - name: Clone correctness branch
+        run: git clone -q --depth=1 --branch tsdb-mempostings-correctness-fix https://github.com/StealthEyeLLC/prometheus.git repo
+      - name: Check format
+        working-directory: repo
         run: |
-          git checkout e06a615c5befd790cf5579369359c185ff8a2a73 -- tsdb/querier.go
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("tsdb/querier.go")
-          text = path.read_text()
-          old = '''func PostingsForMatchers(ctx context.Context, ix IndexReader, ms ...*labels.Matcher) (index.Postings, error) {
-\tif len(ms) == 1 && ms[0].Name == "" && ms[0].Value == "" {
-'''
-          new = '''func PostingsForMatchers(ctx context.Context, ix IndexReader, ms ...*labels.Matcher) (index.Postings, error) {
-\tif snapshotter, ok := ix.(postingsForMatchersSnapshotter); ok {
-\t\tix = snapshotter.postingsForMatchersSnapshot(ms)
-\t}
-
-\tif len(ms) == 1 && ms[0].Name == "" && ms[0].Value == "" {
-'''
-          if text.count(old) != 1:
-              raise SystemExit(f"expected one PostingsForMatchers opening, found {text.count(old)}")
-          path.write_text(text.replace(old, new))
-          PY
-          gofmt -w tsdb/querier.go
+          test -z "$(gofmt -d tsdb/index/postings.go tsdb/index/postings_iterator_test.go tsdb/index/postings_snapshot.go tsdb/postings_snapshot.go tsdb/querier.go tsdb/head_postings_concurrency_test.go)"
           git diff --check
-      - name: Commit and push
+      - name: Run lint
+        working-directory: repo
         run: |
-          git config user.name StealthEyeLLC
-          git config user.email 247854506+StealthEyeLLC@users.noreply.github.com
-          git add tsdb/querier.go
-          git commit -m "tsdb: restore querier and add snapshot hook" -m "Signed-off-by: StealthEyeLLC <247854506+StealthEyeLLC@users.noreply.github.com>"
-          git push origin HEAD:tsdb-mempostings-correctness-fix
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b /tmp v2.11.4 >/dev/null
+          /tmp/golangci-lint run ./tsdb/... --timeout=4m
+      - name: Run focused tests
+        working-directory: repo
+        run: go test ./tsdb ./tsdb/index -run 'TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings|TestMemPostingsOutOfOrderAddDoesNotChangeExistingIterator|TestMemPostingsReadWaiterBlocksNewAdds|TestMemPostingsPartialLabelSetVisibility' -count=20
+      - name: Run race tests
+        working-directory: repo
+        run: go test -race ./tsdb ./tsdb/index -run 'TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings|TestMemPostingsOutOfOrderAddDoesNotChangeExistingIterator|TestMemPostingsReadWaiterBlocksNewAdds|TestMemPostingsPartialLabelSetVisibility' -count=5
+      - name: Run 32-bit tests
+        working-directory: repo
+        run: GOARCH=386 go test ./tsdb ./tsdb/index -run 'TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings|TestMemPostingsOutOfOrderAddDoesNotChangeExistingIterator|TestMemPostingsReadWaiterBlocksNewAdds|TestMemPostingsPartialLabelSetVisibility' -count=5
+      - name: Run dedupelabels tests
+        working-directory: repo
+        run: go test --tags=dedupelabels ./tsdb ./tsdb/index -run 'TestHeadConcurrentSeriesCreationDoesNotExposePartialPostings|TestMemPostingsOutOfOrderAddDoesNotChangeExistingIterator|TestMemPostingsReadWaiterBlocksNewAdds|TestMemPostingsPartialLabelSetVisibility' -count=5
