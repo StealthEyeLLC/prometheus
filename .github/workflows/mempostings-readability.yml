@@ -145,7 +145,6 @@ jobs:
           start = s.index('// postingsPhaseGate separates')
           end = s.index('const memPostingsShardCount = 256')
           s = s[:start] + s[end:]
-          s = s.replace('\t"time"\n', '')
           s = s.replace('gate postingsPhaseGate', 'gate postingsGate')
           replacements = {
               '.gate.beginAdd()': '.gate.enterAdd()',
@@ -180,10 +179,14 @@ jobs:
           PY
           gofmt -w tsdb/index/postings.go tsdb/index/postings_gate.go tsdb/index/postings_phase_gate_test.go
           git diff --check
-      - name: Test
+      - name: Test index
+        shell: bash
         run: |
-          go test ./tsdb/index
-          go test ./tsdb/...
+          go test ./tsdb/index > /tmp/index.log 2>&1 || { tail -n 120 /tmp/index.log; exit 1; }
+      - name: Test TSDB
+        shell: bash
+        run: |
+          go test ./tsdb/... > /tmp/tsdb.log 2>&1 || { tail -n 120 /tmp/tsdb.log; exit 1; }
       - name: Commit
         shell: bash
         run: |
