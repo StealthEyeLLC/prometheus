@@ -15,7 +15,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: tsdb-mempostings-phase-shards
-          fetch-depth: 0
+          fetch-depth: 1
+          show-progress: false
           token: ${{ github.token }}
       - uses: actions/setup-go@v5
         with:
@@ -180,19 +181,17 @@ jobs:
           PY
           gofmt -w tsdb/index/postings.go tsdb/index/postings_gate.go tsdb/index/postings_phase_gate_test.go
           git diff --check
-      - name: Test index
-        shell: bash
-        run: |
-          go test ./tsdb/index > /tmp/index.log 2>&1 || { tail -n 120 /tmp/index.log; exit 1; }
-      - name: Test TSDB
-        shell: bash
-        run: |
-          go test ./tsdb/... > /tmp/tsdb.log 2>&1 || { tail -n 120 /tmp/tsdb.log; exit 1; }
-      - name: Commit
+      - name: Save candidate
         shell: bash
         run: |
           git config user.name 'StealthEyeLLC'
           git config user.email '247854506+StealthEyeLLC@users.noreply.github.com'
           git add tsdb/index/postings.go tsdb/index/postings_gate.go tsdb/index/postings_phase_gate_test.go
           git commit -s -m 'tsdb: simplify MemPostings synchronization'
-          git push origin HEAD:tsdb-mempostings-phase-shards
+          git push origin HEAD:mempostings-readability-candidate-1
+      - name: Test gate
+        run: go test ./tsdb/index -run '^TestMemPostingsReadWaiterBlocksNewAdds$' -v
+      - name: Test index
+        run: go test ./tsdb/index
+      - name: Test TSDB
+        run: go test ./tsdb/...
