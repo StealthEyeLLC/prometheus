@@ -145,6 +145,7 @@ jobs:
           start = s.index('// postingsPhaseGate separates')
           end = s.index('const memPostingsShardCount = 256')
           s = s[:start] + s[end:]
+          s = s.replace('\t"time"\n', '')
           s = s.replace('gate postingsPhaseGate', 'gate postingsGate')
           replacements = {
               '.gate.beginAdd()': '.gate.enterAdd()',
