@@ -1,0 +1,28 @@
+go: downloading github.com/bboreham/go-loser v0.0.0-20230920113527-fcc2c21820a3
+go: downloading github.com/cespare/xxhash/v2 v2.3.0
+go: downloading github.com/grafana/regexp v0.0.0-20250905093917-f7b3be9d1853
+go: downloading github.com/stretchr/testify v1.11.1
+go: downloading go.uber.org/atomic v1.11.0
+go: downloading go.uber.org/goleak v1.3.0
+go: downloading github.com/prometheus/common v0.69.0
+go: downloading golang.org/x/text v0.38.0
+go: downloading github.com/dennwc/varint v1.0.0
+go: downloading github.com/prometheus/client_golang v1.23.2
+go: downloading golang.org/x/sys v0.46.0
+go: downloading github.com/google/go-cmp v0.7.0
+go: downloading golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa
+go: downloading github.com/prometheus/client_model v0.6.2
+go: downloading google.golang.org/protobuf v1.36.11
+go: downloading github.com/beorn7/perks v1.0.1
+go: downloading github.com/prometheus/procfs v0.16.1
+go: downloading github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
+go: downloading github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
+go: downloading github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822
+go: downloading gopkg.in/yaml.v3 v3.0.1
+# github.com/prometheus/prometheus/tsdb/index [github.com/prometheus/prometheus/tsdb/index.test]
+tsdb/index/postings_test.go:1542:11: mp.gate.beginRead undefined (type postingsGate has no field or method beginRead)
+tsdb/index/postings_test.go:1543:17: mp.gate.endRead undefined (type postingsGate has no field or method endRead)
+FAIL	github.com/prometheus/prometheus/tsdb/index [build failed]
+FAIL
+
+exit_status=1
