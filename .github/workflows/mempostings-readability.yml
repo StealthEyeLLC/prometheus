@@ -178,17 +178,23 @@ jobs:
           s = s.replace('.mtx', '.mu')
           s = s.replace('// Start the second Add before releasing the first one.\n', '')
           test.write_text(s)
+
+          test = Path('tsdb/index/postings_test.go')
+          s = test.read_text()
+          s = s.replace('.gate.beginRead()', '.gate.enterRead()')
+          s = s.replace('.gate.endRead()', '.gate.leaveRead()')
+          test.write_text(s)
           PY
-          gofmt -w tsdb/index/postings.go tsdb/index/postings_gate.go tsdb/index/postings_phase_gate_test.go
+          gofmt -w tsdb/index/postings.go tsdb/index/postings_gate.go tsdb/index/postings_phase_gate_test.go tsdb/index/postings_test.go
           git diff --check
       - name: Save candidate
         shell: bash
         run: |
           git config user.name 'StealthEyeLLC'
           git config user.email '247854506+StealthEyeLLC@users.noreply.github.com'
-          git add tsdb/index/postings.go tsdb/index/postings_gate.go tsdb/index/postings_phase_gate_test.go
+          git add tsdb/index/postings.go tsdb/index/postings_gate.go tsdb/index/postings_phase_gate_test.go tsdb/index/postings_test.go
           git commit -s -m 'tsdb: simplify MemPostings synchronization'
-          git push origin HEAD:mempostings-readability-candidate-1
+          git push origin HEAD:mempostings-readability-candidate-2
       - name: Test gate
         run: go test ./tsdb/index -run '^TestMemPostingsReadWaiterBlocksNewAdds$' -v
       - name: Test index
