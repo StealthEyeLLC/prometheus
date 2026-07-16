@@ -1,0 +1,53 @@
+name: Temporary MemPostings candidate finalizer
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.event.pull_request.head.ref == 'mempostings-finalize-trigger'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mempostings-readability-candidate-1
+          fetch-depth: 1
+          show-progress: false
+          token: ${{ github.token }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Update internal test calls
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tsdb/index/postings_test.go')
+          text = path.read_text()
+          old = text
+          text = text.replace('mp.gate.beginRead()', 'mp.gate.enterRead()')
+          text = text.replace('mp.gate.endRead()', 'mp.gate.leaveRead()')
+          if text == old:
+              raise SystemExit('expected test calls were not found')
+          path.write_text(text)
+          PY
+          gofmt -w tsdb/index/postings_test.go
+          git diff --check
+      - name: Test gate
+        run: go test ./tsdb/index -run '^TestMemPostingsReadWaiterBlocksNewAdds$'
+      - name: Test index
+        run: go test ./tsdb/index
+      - name: Test TSDB
+        run: go test ./tsdb/...
+      - name: Save candidate
+        shell: bash
+        run: |
+          git config user.name 'StealthEyeLLC'
+          git config user.email '247854506+StealthEyeLLC@users.noreply.github.com'
+          git add tsdb/index/postings_test.go
+          git commit -s -m 'tsdb: update MemPostings gate test calls'
+          git push origin HEAD:mempostings-readability-candidate-1
